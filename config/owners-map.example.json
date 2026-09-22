@@ -1,0 +1,6 @@
+{
+  "_comment": "Keys are GitHub handles/teams exactly as they appear in CODEOWNERS (without the @). Copy this file to owners-map.json and fill in real Slack IDs.",
+
+  "octocat": { "type": "user", "id": "U0123ABCDE" },
+  "your-org/team-mobile": { "type": "usergroup", "id": "S0123ABCDE" }
+}

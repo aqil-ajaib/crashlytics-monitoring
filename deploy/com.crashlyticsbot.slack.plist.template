@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.crashlyticsbot.slack</string>
+
+  <key>UserName</key>
+  <string>__RUN_USER__</string>
+
+  <key>WorkingDirectory</key>
+  <string>__INSTALL_DIR__</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE_BIN__</string>
+    <string>__INSTALL_DIR__/dist/app.js</string>
+  </array>
+
+  <!-- Start automatically on boot, and keep restarting if it crashes.
+       SuccessfulExit=false means: only relaunch on a nonzero exit / crash,
+       not if someone intentionally stops it with launchctl. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- Avoid a hard crash-loop hammering Slack/GitHub if something is
+       persistently broken. -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__INSTALL_DIR__/logs/bot.log</string>
+  <key>StandardErrorPath</key>
+  <string>__INSTALL_DIR__/logs/bot.err.log</string>
+</dict>
+</plist>

@@ -1,0 +1,25 @@
+{
+  "name": "crashlytics-codeowners-bot",
+  "version": "1.0.0",
+  "description": "Slack bot that replies in-thread to Firebase Crashlytics alerts, mentioning the CODEOWNERS-mapped Slack user for the crashing file.",
+  "main": "dist/app.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/app.js",
+    "dev": "ts-node-dev --respawn --transpile-only src/app.ts"
+  },
+  "dependencies": {
+    "@octokit/rest": "^20.1.1",
+    "@slack/bolt": "^5.1.0",
+    "dotenv": "^16.4.5",
+    "ignore": "^5.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.5.3"
+  }
+}
