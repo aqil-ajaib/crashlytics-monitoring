@@ -1,7 +1,8 @@
 import { App, LogLevel } from '@slack/bolt';
+import type { WebClient } from '@slack/web-api';
 import { config } from './config';
 import { parseCrashMessage } from './crashMessageParser';
-import { findFullPath, getCodeownersContent } from './github';
+import { findFullPath, getCodeownersContent, getLastEditor } from './github';
 import { parseCodeowners, findOwners } from './codeowners';
 import { resolveSlackMention } from './ownerMap';
 
@@ -53,6 +54,36 @@ function candidateFilenamesForClass(className: string): string[] {
   return candidates;
 }
 
+// Git commit emails rarely change identity, so this is safe to cache for the
+// life of the process (unlike the file/CODEOWNERS caches in github.ts, which
+// expire because repo content changes).
+const emailToSlackId = new Map<string, string | null>();
+
+async function resolveSlackIdByEmail(client: WebClient, email: string): Promise<string | null> {
+  if (emailToSlackId.has(email)) return emailToSlackId.get(email)!;
+
+  let id: string | null = null;
+  try {
+    const result = await client.users.lookupByEmail({ email });
+    id = result.user?.id ?? null;
+  } catch {
+    // No Slack account for this email (e.g. a GitHub noreply email, or an
+    // external contributor) — fall back to showing the plain name instead.
+    id = null;
+  }
+
+  emailToSlackId.set(email, id);
+  return id;
+}
+
+async function buildLastEditedLine(client: WebClient, filePath: string): Promise<string | undefined> {
+  const editor = await getLastEditor(filePath).catch(() => null);
+  if (!editor) return undefined;
+
+  const slackId = await resolveSlackIdByEmail(client, editor.email);
+  return `📝 *Last edited by:* ${slackId ? `<@${slackId}>` : editor.name}`;
+}
+
 function buildOwnerReplyBlocks(text: string, channel: string, parentTs: string) {
   return [
     { type: 'section', text: { type: 'mrkdwn', text } },
@@ -71,7 +102,7 @@ function buildOwnerReplyBlocks(text: string, channel: string, parentTs: string) 
   ];
 }
 
-app.message(async ({ message, say, logger }) => {
+app.message(async ({ message, say, logger, client }) => {
   const msg = message as Record<string, any>;
 
   logger.info(`[debug] received message event: channel=${msg.channel} subtype=${msg.subtype} text=${JSON.stringify(msg.text ?? '').slice(0, 200)}`);
@@ -131,11 +162,14 @@ app.message(async ({ message, say, logger }) => {
     const entries = parseCodeowners(codeownersContent);
     const owners = findOwners(filePath, entries);
 
+    const lastEditedLine = await buildLastEditedLine(client, filePath);
+
     if (owners.length === 0) {
       await say({
         text: [
           `Crash traced to \`${filePath}\`, but no CODEOWNERS entry matches this path.`,
           ...(linkLine ? [linkLine] : []),
+          ...(lastEditedLine ? [lastEditedLine] : []),
         ].join('\n'),
         thread_ts: threadTs,
       });
@@ -150,6 +184,7 @@ app.message(async ({ message, say, logger }) => {
       `📂 *Crash traced to* \`${filePath}\`${crash.line ? `:${crash.line}` : ''}`,
       ...(linkLine ? [linkLine] : []),
       `👥 *Code owner:* ${mentions.join(', ')}`,
+      ...(lastEditedLine ? [lastEditedLine] : []),
     ].join('\n');
 
     await say({

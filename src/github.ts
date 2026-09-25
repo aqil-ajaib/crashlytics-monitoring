@@ -50,6 +50,27 @@ export async function findFullPath(filename: string): Promise<string[]> {
   return paths.filter((p) => p === filename || p.endsWith(`/${filename}`));
 }
 
+export interface LastEditor {
+  name: string;
+  email: string;
+}
+
+/** Most recent commit that touched this exact file, deliberately uncached since "last edited" should reflect the current state at alert time. */
+export async function getLastEditor(filePath: string): Promise<LastEditor | null> {
+  const { data } = await octokit.rest.repos.listCommits({
+    owner: config.githubOwner,
+    repo: config.githubRepo,
+    path: filePath,
+    sha: config.githubBranch,
+    per_page: 1,
+  });
+
+  const author = data[0]?.commit?.author;
+  if (!author?.email) return null;
+
+  return { name: author.name ?? author.email, email: author.email };
+}
+
 export async function getCodeownersContent(): Promise<string> {
   const cached = codeownersCache.get('codeowners');
   if (cached) return cached;
