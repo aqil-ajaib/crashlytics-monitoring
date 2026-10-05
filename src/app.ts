@@ -84,6 +84,25 @@ async function buildLastEditedLine(client: WebClient, filePath: string): Promise
   return `📝 *Last edited by:* ${slackId ? `<@${slackId}>` : editor.name}`;
 }
 
+// Slack redelivers the same event (same event_id) if we don't ack within its
+// timeout window — without this, a slow lookup means Slack retries and we
+// process (and reply to) the identical alert multiple times. Bounded so it
+// doesn't grow unbounded over a long-running process.
+const processedEventIds = new Set<string>();
+const MAX_PROCESSED_EVENT_IDS = 1000;
+
+function alreadyProcessed(eventId: string | undefined): boolean {
+  if (!eventId) return false;
+  if (processedEventIds.has(eventId)) return true;
+
+  processedEventIds.add(eventId);
+  if (processedEventIds.size > MAX_PROCESSED_EVENT_IDS) {
+    const oldest = processedEventIds.values().next().value;
+    if (oldest !== undefined) processedEventIds.delete(oldest);
+  }
+  return false;
+}
+
 function buildOwnerReplyBlocks(text: string, channel: string, parentTs: string) {
   return [
     { type: 'section', text: { type: 'mrkdwn', text } },
@@ -102,10 +121,16 @@ function buildOwnerReplyBlocks(text: string, channel: string, parentTs: string) 
   ];
 }
 
-app.message(async ({ message, say, logger, client }) => {
+app.message(async ({ message, say, logger, client, body }) => {
   const msg = message as Record<string, any>;
 
   logger.info(`[debug] received message event: channel=${msg.channel} subtype=${msg.subtype} text=${JSON.stringify(msg.text ?? '').slice(0, 200)}`);
+
+  const eventId = (body as Record<string, any>)?.event_id;
+  if (alreadyProcessed(eventId)) {
+    logger.info(`[debug] skipping retried delivery of event ${eventId}`);
+    return;
+  }
 
   // Ignore anything outside the crash channel (if configured).
   if (config.crashChannelId && msg.channel !== config.crashChannelId) return;
@@ -176,9 +201,9 @@ app.message(async ({ message, say, logger, client }) => {
       return;
     }
 
-    const mentions = owners.map(
+    const mentions = [...new Set(owners.map(
       (owner) => resolveSlackMention(owner) ?? `\`${owner}\` _(no Slack mapping — add to config/owners-map.json)_`
-    );
+    ))];
 
     const replyText = [
       `📂 *Crash traced to* \`${filePath}\`${crash.line ? `:${crash.line}` : ''}`,
