@@ -59,17 +59,35 @@ function candidateFilenamesForClass(className: string): string[] {
 // expire because repo content changes).
 const emailToSlackId = new Map<string, string | null>();
 
+async function lookupSlackIdByEmail(client: WebClient, email: string): Promise<string | null> {
+  try {
+    const result = await client.users.lookupByEmail({ email });
+    return result.user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// "name+1@company.com" -> "name@company.com". GitHub noreply addresses are
+// excluded since their "+" part is a username, not a mail alias.
+function stripPlusAlias(email: string): string | null {
+  const [local, domain] = email.split('@');
+  if (!domain || domain.toLowerCase() === 'users.noreply.github.com') return null;
+
+  const plusIndex = local.indexOf('+');
+  return plusIndex > 0 ? `${local.slice(0, plusIndex)}@${domain}` : null;
+}
+
 async function resolveSlackIdByEmail(client: WebClient, email: string): Promise<string | null> {
   if (emailToSlackId.has(email)) return emailToSlackId.get(email)!;
 
-  let id: string | null = null;
-  try {
-    const result = await client.users.lookupByEmail({ email });
-    id = result.user?.id ?? null;
-  } catch {
-    // No Slack account for this email (e.g. a GitHub noreply email, or an
-    // external contributor) — fall back to showing the plain name instead.
-    id = null;
+  // No Slack account for the exact email (e.g. a GitHub noreply email, or an
+  // external contributor) — try without a "+alias", else the caller falls
+  // back to showing the plain name instead.
+  let id = await lookupSlackIdByEmail(client, email);
+  if (!id) {
+    const withoutAlias = stripPlusAlias(email);
+    if (withoutAlias) id = await lookupSlackIdByEmail(client, withoutAlias);
   }
 
   emailToSlackId.set(email, id);
