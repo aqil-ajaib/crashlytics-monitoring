@@ -94,12 +94,17 @@ async function resolveSlackIdByEmail(client: WebClient, email: string): Promise<
   return id;
 }
 
-async function buildLastEditedLine(client: WebClient, filePath: string): Promise<string | undefined> {
-  const editor = await getLastEditor(filePath).catch(() => null);
+async function buildLastEditedLine(client: WebClient, filePath: string, version?: string): Promise<string | undefined> {
+  const editor = await getLastEditor(filePath, version).catch(() => null);
   if (!editor) return undefined;
 
   const slackId = await resolveSlackIdByEmail(client, editor.email);
-  return `📝 *Last edited by:* ${slackId ? `<@${slackId}>` : editor.name}`;
+  const source = editor.releaseBranch
+    ? ` _(${editor.releaseBranch})_`
+    : editor.missingReleaseBranch
+      ? ` _(${editor.missingReleaseBranch} not found, using ${config.githubBranch ?? 'default branch'})_`
+      : '';
+  return `📝 *Last edited by:* ${slackId ? `<@${slackId}>` : editor.name}${source}`;
 }
 
 // Slack redelivers the same event (same event_id) if we don't ack within its
@@ -205,7 +210,7 @@ app.message(async ({ message, say, logger, client, body }) => {
     const entries = parseCodeowners(codeownersContent);
     const owners = findOwners(filePath, entries);
 
-    const lastEditedLine = await buildLastEditedLine(client, filePath);
+    const lastEditedLine = await buildLastEditedLine(client, filePath, crash.version);
 
     if (owners.length === 0) {
       await say({

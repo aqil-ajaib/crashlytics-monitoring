@@ -53,15 +53,18 @@ export async function findFullPath(filename: string): Promise<string[]> {
 export interface LastEditor {
   name: string;
   email: string;
+  /** The release branch the author was read from, when the alert's version had one. */
+  releaseBranch?: string;
+  /** The release branch we wanted but couldn't use, so the default branch was read instead. */
+  missingReleaseBranch?: string;
 }
 
-/** Most recent commit that touched this exact file, deliberately uncached since "last edited" should reflect the current state at alert time. */
-export async function getLastEditor(filePath: string): Promise<LastEditor | null> {
+async function lastCommitAuthor(filePath: string, sha: string | undefined): Promise<{ name: string; email: string } | null> {
   const { data } = await octokit.rest.repos.listCommits({
     owner: config.githubOwner,
     repo: config.githubRepo,
     path: filePath,
-    sha: config.githubBranch,
+    sha,
     per_page: 1,
   });
 
@@ -69,6 +72,30 @@ export async function getLastEditor(filePath: string): Promise<LastEditor | null
   if (!author?.email) return null;
 
   return { name: author.name ?? author.email, email: author.email };
+}
+
+/**
+ * Most recent commit that touched this exact file, deliberately uncached since
+ * "last edited" should reflect the current state at alert time. When the alert
+ * carries an app version, read it from that version's release branch so we
+ * blame the code that actually shipped, not whatever landed afterwards.
+ */
+export async function getLastEditor(filePath: string, version?: string): Promise<LastEditor | null> {
+  const releaseBranch = version ? `release/${version}` : undefined;
+
+  if (releaseBranch) {
+    try {
+      const author = await lastCommitAuthor(filePath, releaseBranch);
+      if (author) return { ...author, releaseBranch };
+    } catch (err: any) {
+      if (err?.status !== 404) throw err;
+    }
+  }
+
+  const author = await lastCommitAuthor(filePath, config.githubBranch);
+  if (!author) return null;
+
+  return { ...author, missingReleaseBranch: releaseBranch };
 }
 
 export async function getCodeownersContent(): Promise<string> {

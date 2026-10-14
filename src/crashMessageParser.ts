@@ -15,6 +15,7 @@ export interface CrashInfo {
   line?: number;
   className?: string;
   crashLink?: string;
+  version?: string;
   text: string;
 }
 
@@ -25,6 +26,8 @@ const FILE_DASH_PATTERN = /\b([A-Za-z_$][\w$]*\.(?:kt|java))\s*-\s*[\w$.]/;
 const QUALIFIED_NAME_PATTERN = /\*([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*){2,})\*/;
 // The official Firebase Slack app's "Summary" field: "Summary\n<url|qualified.name>" or "Summary\nqualified.name".
 // The label itself may or may not be bold depending on how the block was rendered, so we don't require asterisks around it.
+// The alert's "Version" field, e.g. "Version\n2.108.0".
+const VERSION_FIELD_PATTERN = /\bVersion\b\*?\s*\n\s*(\d+\.\d+\.\d+)/i;
 const SUMMARY_FIELD_PATTERN = /\bSummary\b\*?\s*\n(?:<[^|>]*\|)?([^>\n]+)>?/i;
 
 /**
@@ -138,22 +141,23 @@ export function parseCrashMessage(message: Record<string, any>): CrashInfo {
   }
 
   const crashLink = CRASH_LINK_PATTERN.exec(text)?.[1];
+  const version = VERSION_FIELD_PATTERN.exec(text)?.[1];
 
   const frameMatch = FRAME_PATTERN.exec(text);
   if (frameMatch) {
-    return { isCrashlyticsAlert: true, file: frameMatch[1], line: Number(frameMatch[2]), crashLink, text };
+    return { isCrashlyticsAlert: true, file: frameMatch[1], line: Number(frameMatch[2]), crashLink, version, text };
   }
 
   const fileDashMatch = FILE_DASH_PATTERN.exec(text);
   if (fileDashMatch) {
-    return { isCrashlyticsAlert: true, file: fileDashMatch[1], crashLink, text };
+    return { isCrashlyticsAlert: true, file: fileDashMatch[1], crashLink, version, text };
   }
 
   const summaryMatch = SUMMARY_FIELD_PATTERN.exec(text);
   if (summaryMatch) {
     const className = deriveClassName(summaryMatch[1].trim());
     if (className) {
-      return { isCrashlyticsAlert: true, className, crashLink, text };
+      return { isCrashlyticsAlert: true, className, crashLink, version, text };
     }
   }
 
@@ -161,9 +165,9 @@ export function parseCrashMessage(message: Record<string, any>): CrashInfo {
   if (qualifiedMatch) {
     const className = deriveClassName(qualifiedMatch[1]);
     if (className) {
-      return { isCrashlyticsAlert: true, className, crashLink, text };
+      return { isCrashlyticsAlert: true, className, crashLink, version, text };
     }
   }
 
-  return { isCrashlyticsAlert: true, crashLink, text };
+  return { isCrashlyticsAlert: true, crashLink, version, text };
 }
