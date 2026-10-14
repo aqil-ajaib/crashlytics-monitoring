@@ -98,6 +98,86 @@ export async function getLastEditor(filePath: string, version?: string): Promise
   return { ...author, missingReleaseBranch: releaseBranch };
 }
 
+export interface FileAtRef {
+  content: string;
+  /** The ref actually read, usable for blame: the release branch if it exists, else the default branch. */
+  ref: string;
+}
+
+/** Reads a file from the alert version's release branch, falling back to the default branch. */
+export async function getFileAtRef(filePath: string, version?: string): Promise<FileAtRef | null> {
+  const attempts = [...(version ? [`release/${version}`] : []), config.githubBranch];
+
+  for (const ref of attempts) {
+    try {
+      const response = await octokit.rest.repos.getContent({
+        owner: config.githubOwner,
+        repo: config.githubRepo,
+        path: filePath,
+        ref,
+      });
+
+      const data = response.data;
+      if (Array.isArray(data) || !('content' in data) || !data.content) return null;
+      return { content: Buffer.from(data.content, 'base64').toString('utf-8'), ref: ref ?? 'HEAD' };
+    } catch (err: any) {
+      if (err?.status !== 404) throw err;
+    }
+  }
+
+  return null;
+}
+
+export interface BlameChange {
+  name: string;
+  email: string;
+  date: string;
+}
+
+const BLAME_QUERY = `
+  query ($owner: String!, $repo: String!, $ref: String!, $path: String!) {
+    repository(owner: $owner, name: $repo) {
+      object(expression: $ref) {
+        ... on Commit {
+          blame(path: $path) {
+            ranges {
+              startingLine
+              endingLine
+              commit { committedDate author { name email } }
+            }
+          }
+        }
+      }
+    }
+  }`;
+
+/** The most recent commit among those that last touched any line in [startLine, endLine]. */
+export async function getLastChangeInRange(filePath: string, ref: string, startLine: number, endLine: number): Promise<BlameChange | null> {
+  const result: any = await octokit.graphql(BLAME_QUERY, {
+    owner: config.githubOwner,
+    repo: config.githubRepo,
+    ref,
+    path: filePath,
+  });
+
+  const ranges: any[] = result.repository?.object?.blame?.ranges ?? [];
+  let latest: BlameChange | null = null;
+
+  for (const range of ranges) {
+    if (range.endingLine < startLine || range.startingLine > endLine) continue;
+
+    const author = range.commit?.author;
+    if (!author?.email) continue;
+
+    const date: string = range.commit.committedDate;
+    if (!latest || date > latest.date) {
+      latest = { name: author.name ?? author.email, email: author.email, date };
+    }
+  }
+
+  return latest;
+}
+
 export async function getCodeownersContent(): Promise<string> {
   const cached = codeownersCache.get('codeowners');
   if (cached) return cached;

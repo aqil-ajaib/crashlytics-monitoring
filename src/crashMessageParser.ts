@@ -16,6 +16,7 @@ export interface CrashInfo {
   className?: string;
   crashLink?: string;
   version?: string;
+  methodName?: string;
   text: string;
 }
 
@@ -23,6 +24,8 @@ const FIREBASE_LINK_PATTERN = /console\.firebase\.google\.com\/[^\s|>]*\/crashly
 const CRASH_LINK_PATTERN = /(https?:\/\/console\.firebase\.google\.com\/[^\s|>]+)/i;
 const FRAME_PATTERN = /\(([A-Za-z_$][\w$]*\.(?:kt|java)):(\d+)\)/;
 const FILE_DASH_PATTERN = /\b([A-Za-z_$][\w$]*\.(?:kt|java))\s*-\s*[\w$.]/;
+const FILE_DASH_CHAIN_PATTERN = /\b[A-Za-z_$][\w$]*\.(?:kt|java)\s*-\s*([\w$.&;-]+)/;
+const FRAME_METHOD_PATTERN = /\.([A-Za-z_$][\w$]*)\s*\([A-Za-z_$][\w$]*\.(?:kt|java):\d+\)/;
 const QUALIFIED_NAME_PATTERN = /\*([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*){2,})\*/;
 // The official Firebase Slack app's "Summary" field: "Summary\n<url|qualified.name>" or "Summary\nqualified.name".
 // The label itself may or may not be bold depending on how the block was rendered, so we don't require asterisks around it.
@@ -132,6 +135,39 @@ function deriveClassName(qualifiedName: string): string | undefined {
   return undefined;
 }
 
+
+const SYNTHETIC_METHODS = new Set(['invokeSuspend', 'invoke', 'run', 'call', 'apply']);
+
+function decodeEntities(text: string): string {
+  return text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+/**
+ * Best-effort source function name from the alert's qualified frame, e.g.
+ * "com.x.Foo.bar" -> "bar". Compiler-generated pieces are unwrapped where the
+ * real enclosing function is recoverable ("Foo.baz$lambda$5" -> "baz",
+ * "Foo$baz$1.invokeSuspend" -> "baz", Compose's "Btn-uDo3WH8" -> "Btn"), and
+ * undefined is returned for frames with no source function (constructors,
+ * bare classes).
+ */
+function deriveMethodName(qualifiedName: string): string | undefined {
+  const parts = decodeEntities(qualifiedName).split('.');
+  if (parts.length < 2) return undefined;
+
+  const last = parts[parts.length - 1];
+  const owner = parts[parts.length - 2];
+  if (!/^[A-Z]/.test(owner) || last.startsWith('<') || last.startsWith('access$')) return undefined;
+
+  let name = last;
+  if (SYNTHETIC_METHODS.has(name)) {
+    const enclosing = owner.split('$').slice(1).filter((seg) => !/^\d+$/.test(seg));
+    name = enclosing[enclosing.length - 1] ?? '';
+  }
+
+  name = name.split('$')[0].replace(/-[A-Za-z0-9]{6,8}$/, '');
+  return /^[A-Za-z_][\w]*$/.test(name) ? name : undefined;
+}
+
 export function parseCrashMessage(message: Record<string, any>): CrashInfo {
   const text = collectMessageText(message);
   const isCrashlyticsAlert = looksLikeCrashlyticsAlert(text);
@@ -145,19 +181,23 @@ export function parseCrashMessage(message: Record<string, any>): CrashInfo {
 
   const frameMatch = FRAME_PATTERN.exec(text);
   if (frameMatch) {
-    return { isCrashlyticsAlert: true, file: frameMatch[1], line: Number(frameMatch[2]), crashLink, version, text };
+    const methodName = FRAME_METHOD_PATTERN.exec(text)?.[1];
+    return { isCrashlyticsAlert: true, file: frameMatch[1], line: Number(frameMatch[2]), crashLink, version, methodName, text };
   }
 
   const fileDashMatch = FILE_DASH_PATTERN.exec(text);
   if (fileDashMatch) {
-    return { isCrashlyticsAlert: true, file: fileDashMatch[1], crashLink, version, text };
+    const chain = FILE_DASH_CHAIN_PATTERN.exec(text)?.[1];
+    const methodName = chain ? deriveMethodName(`X.${chain}`) : undefined;
+    return { isCrashlyticsAlert: true, file: fileDashMatch[1], crashLink, version, methodName, text };
   }
 
   const summaryMatch = SUMMARY_FIELD_PATTERN.exec(text);
   if (summaryMatch) {
     const className = deriveClassName(summaryMatch[1].trim());
     if (className) {
-      return { isCrashlyticsAlert: true, className, crashLink, version, text };
+      const methodName = deriveMethodName(summaryMatch[1].trim());
+      return { isCrashlyticsAlert: true, className, crashLink, version, methodName, text };
     }
   }
 
@@ -165,7 +205,8 @@ export function parseCrashMessage(message: Record<string, any>): CrashInfo {
   if (qualifiedMatch) {
     const className = deriveClassName(qualifiedMatch[1]);
     if (className) {
-      return { isCrashlyticsAlert: true, className, crashLink, version, text };
+      const methodName = deriveMethodName(qualifiedMatch[1]);
+      return { isCrashlyticsAlert: true, className, crashLink, version, methodName, text };
     }
   }
 

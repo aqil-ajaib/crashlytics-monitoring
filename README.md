@@ -37,8 +37,9 @@ the top stack frame formatted as `ClassName.method (File.kt:123)`. This bot:
 5. Fetches and parses `CODEOWNERS`, matching the full path using gitignore-style pattern rules (last match wins, per the CODEOWNERS spec).
 6. Maps the matched GitHub handle/team to a Slack user or user group ID via `config/owners-map.json`.
 7. Looks up the most recent commit that touched that file on the `release/<version>` branch matching the alert's `Version` field (falling back to the default branch if that release branch doesn't exist), and tries to match its git author email to a Slack account (`users.lookupByEmail`). Falls back to the plain git author name if no Slack account matches (e.g. a GitHub noreply email).
-8. Replies in the alert's thread with `chat.postMessage` (`thread_ts` = original message timestamp), `@`-mentioning the CODEOWNERS owner and the last editor, with an **"ACK and will investigate"** button attached.
-9. When someone clicks that button: reacts to the original alert message with `:ackw:`, and posts a follow-up thread reply `@`-mentioning whoever clicked, saying "ACK and will investigate this issue."
+8. If the alert names a function (or a line number), reads the file from that same release branch, locates the function's body, and asks GitHub's blame who most recently changed it. Skipped when the function can't be pinned to exactly one declaration (overloads, lambdas, constructors, generated code).
+9. Replies in the alert's thread with `chat.postMessage` (`thread_ts` = original message timestamp), `@`-mentioning the CODEOWNERS owner, the file's last editor and the function's last editor, with an **"ACK and will investigate"** button attached.
+10. When someone clicks that button: reacts to the original alert message with `:ackw:`, and posts a follow-up thread reply `@`-mentioning whoever clicked, saying "ACK and will investigate this issue."
 
 **Known limitation:** this relies on Crashlytics including the `(File.kt:line)`
 pattern in the alert text, which is true for most crashes but may be absent

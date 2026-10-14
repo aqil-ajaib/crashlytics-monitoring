@@ -1,8 +1,9 @@
 import { App, LogLevel } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
 import { config } from './config';
-import { parseCrashMessage } from './crashMessageParser';
-import { findFullPath, getCodeownersContent, getLastEditor } from './github';
+import { parseCrashMessage, type CrashInfo } from './crashMessageParser';
+import { findFullPath, getCodeownersContent, getFileAtRef, getLastChangeInRange, getLastEditor } from './github';
+import { locateFunction } from './functionLocator';
 import { parseCodeowners, findOwners } from './codeowners';
 import { resolveSlackMention } from './ownerMap';
 
@@ -105,6 +106,53 @@ async function buildLastEditedLine(client: WebClient, filePath: string, version?
       ? ` _(${editor.missingReleaseBranch} not found, using ${config.githubBranch ?? 'default branch'})_`
       : '';
   return `📝 *Last edited by:* ${slackId ? `<@${slackId}>` : editor.name}${source}`;
+}
+
+type Log = { info: (msg: string) => void; warn: (msg: string) => void };
+
+/**
+ * Who last changed the specific line (when the alert has one) or function (when
+ * we can find it in the source) that crashed, read from the alert version's
+ * release branch. Returns nothing when the target can't be pinned down.
+ */
+async function buildChangedTargetLine(
+  client: WebClient,
+  filePath: string,
+  crash: CrashInfo,
+  logger: Log,
+): Promise<string | undefined> {
+  if (!crash.line && !crash.methodName) return undefined;
+
+  try {
+    const file = await getFileAtRef(filePath, crash.version);
+    if (!file) return undefined;
+
+    let startLine: number;
+    let endLine: number;
+    let label: string;
+
+    if (crash.line) {
+      startLine = endLine = crash.line;
+      label = `Line ${crash.line}`;
+    } else {
+      const located = locateFunction(file.content, filePath, crash.methodName!);
+      if (!located) {
+        logger.info(`[debug] could not pin down a single declaration of ${crash.methodName} in ${filePath}`);
+        return undefined;
+      }
+      ({ startLine, endLine } = located);
+      label = `Function \`${crash.methodName}\``;
+    }
+
+    const change = await getLastChangeInRange(filePath, file.ref, startLine, endLine);
+    if (!change) return undefined;
+
+    const slackId = await resolveSlackIdByEmail(client, change.email);
+    return `🔧 *${label} last changed by:* ${slackId ? `<@${slackId}>` : change.name} _(${change.date.slice(0, 10)})_`;
+  } catch (err) {
+    logger.warn(`Failed to blame ${crash.methodName ?? `line ${crash.line}`} in ${filePath}: ${err}`);
+    return undefined;
+  }
 }
 
 // Slack redelivers the same event (same event_id) if we don't ack within its
@@ -210,7 +258,10 @@ app.message(async ({ message, say, logger, client, body }) => {
     const entries = parseCodeowners(codeownersContent);
     const owners = findOwners(filePath, entries);
 
-    const lastEditedLine = await buildLastEditedLine(client, filePath, crash.version);
+    const [lastEditedLine, changedTargetLine] = await Promise.all([
+      buildLastEditedLine(client, filePath, crash.version),
+      buildChangedTargetLine(client, filePath, crash, logger),
+    ]);
 
     if (owners.length === 0) {
       await say({
@@ -218,6 +269,7 @@ app.message(async ({ message, say, logger, client, body }) => {
           `Crash traced to \`${filePath}\`, but no CODEOWNERS entry matches this path.`,
           ...(linkLine ? [linkLine] : []),
           ...(lastEditedLine ? [lastEditedLine] : []),
+          ...(changedTargetLine ? [changedTargetLine] : []),
         ].join('\n'),
         thread_ts: threadTs,
       });
@@ -233,6 +285,7 @@ app.message(async ({ message, say, logger, client, body }) => {
       ...(linkLine ? [linkLine] : []),
       `👥 *Code owner:* ${mentions.join(', ')}`,
       ...(lastEditedLine ? [lastEditedLine] : []),
+      ...(changedTargetLine ? [changedTargetLine] : []),
     ].join('\n');
 
     await say({
